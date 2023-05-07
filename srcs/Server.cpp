@@ -111,12 +111,17 @@ void Server:: accept_socket(void)
                         close (this->new_socket_fd);
                     else
                     {
+                        char host[256];
+                        int result = getnameinfo((struct sockaddr*) &this->socker_addr, sizeof(this->socker_addr), host, 256, NULL, 0, 0);
                         std:: cout << "connection accepted" << std:: endl;
                         this->fds[num_fds].fd = this->new_socket_fd;
                         this->fds[num_fds].events = POLLIN;
                         num_fds++;
                         Message my_message(this->new_socket_fd);
                         my_message.set_time();
+                        if (result == 0) {
+                            my_message.add_hostname(std::string(host));
+                        }
                         this->file_vectors[new_socket_fd] = my_message;
                     }
                 }
@@ -140,6 +145,7 @@ void Server:: read_write_socket(int sockfd, int *num_fds, Message *new_user)
 
     bzero(buffer, 511);
     n = recv(sockfd, buffer, 510, 0);
+    buffer[n] = 0;
     check = 0;
     if (n < 0)
     {
@@ -161,6 +167,37 @@ void Server:: read_write_socket(int sockfd, int *num_fds, Message *new_user)
         std:: cout << "Error: Writing From Socket" << std:: endl;
         exit(1);
     }
+    check_Nick_send_message(sockfd, new_user);
+}
+
+void Server:: check_Nick_send_message(int sock, Message *new_user)
+{
+    int check;
+    int num;
+    
+    std:: map<int, Message>:: iterator it = this->file_vectors.find(sock);
+    std:: map<int, Message>:: iterator it_incre = this->file_vectors.begin();
+    if (it != this->file_vectors.end() && it != it_incre)
+    {
+        if (new_user->get_my_user().size() != 0)
+        {
+            if (it_incre != this->file_vectors.end())
+            {
+                for (; it_incre != it; ++it_incre)
+                {
+                    Message value = it_incre->second;
+                    if (value.get_my_user() == new_user->get_my_user())
+                    {
+                        std:: string _message = "436 ERR_NICKCOLLISION " + new_user->get_my_user() +  " :Nickname collision KILL\r\n";
+                        num = display_message(new_user->get_socket(), _message);
+                        new_user->erase_user();
+                        return ;
+                    }
+                }
+            }
+        }
+    }
+    check = HandleError(new_user->send_Message_identification(), sock);  
 }
 
 void Server:: send_socket(void)
@@ -185,9 +222,6 @@ int Server:: HandleError(int error_replies, int sockfd)
         case 11:
             close_socket(this->file_vectors[sockfd].get_socket());
             break;
-        case 12:
-            std:: cout << "Invalid Command" << std:: endl;
-            break;
         case 13:
             num = write_long_message(sockfd);
             break;
@@ -206,6 +240,9 @@ int Server:: HandleError(int error_replies, int sockfd)
         case 412:
             num = write(sockfd, "412 ERR_NOTEXTTOSEND :No text to send\r\n", 39);
             break;
+        case 421 :
+            num = write(sockfd, "421 ERR_UNKNOWNCOMMAND :Unknown command\r\n", 41);
+            break ;
         case 431:
             num = write(sockfd, "431 ERR_NONICKNAMEGIVEN:No nickname given\r\n", 43);
             break;
@@ -262,8 +299,6 @@ void Server:: close_socket(int socket)
     }
     std:: cout << "Client is DISCONNECTED" << std:: endl;
     close(socket);
-    std::cout << "######## : " + this->file_vectors[my_place].get_client().get_nick_name() << std::endl ;
-    std::cout << "######## : " <<  this->file_vectors[my_place].get_socket() << std::endl ;
     this->file_vectors.erase(my_place);
     it = file_vectors.find(socket);
     if (it != file_vectors.end())
@@ -276,7 +311,7 @@ int Server:: write_long_message(int sockfd)
 
     num = 0;
     std:: string message;
-    // std:: cout << "Message : " << this->file_vectors[sockfd].get_welcome_message() << std:: endl;
+
     message = this->file_vectors[sockfd].get_welcome_message() + "\r\n";
     if (message.size() != 0)
         num = display_message(sockfd, message);
@@ -294,14 +329,12 @@ int Server:: send_private_message(int sockfd)
 {
     int num = 0;
     std:: string message;
-    // std:: map<int, Message>::iterator it ;
 
-    std::cout << "dkhlate hna send_private message o hahowa l user dialna"  << this->file_vectors[sockfd].get_user_to_send() << std::endl;
     for (size_t i = 0; i != this->file_vectors.size(); i++)
     {
         if (this->file_vectors[i].get_my_user() == this->file_vectors[sockfd].get_user_to_send())
         {
-            message = ":" + this->file_vectors[sockfd].get_my_user() + this->file_vectors[sockfd].get_notice_private() + this->file_vectors[i].get_my_user() + " :" + this->file_vectors[sockfd].get_message_to_send() + "\r\n";
+            message = ":" + this->file_vectors[sockfd].get_my_user() + this->file_vectors[sockfd].full_host() + this->file_vectors[sockfd].get_notice_private() + this->file_vectors[i].get_my_user() + " :" + this->file_vectors[sockfd].get_message_to_send() + "\r\n";
             num = display_message(this->file_vectors[i].get_socket(), message);
             return (num);
         }
@@ -400,7 +433,9 @@ void    Server::send_message_to_channel(std::string channel_name,std::string mes
     std::string msg;
 
     list = this->channels[channel_name].get_users_list();
-    msg = ":" + client + " PRIVMSG #" + channel_name + " : " + message + "\r\n";
+    if (message[0] == '#')
+        message = message.substr(message.find(' '), message.find('\r'));
+    msg = ":" + client + this->file_vectors[get_user_socket(client)].full_host() + " PRIVMSG #" + channel_name + " :" + message + "\r\n";
     for (it = this->file_vectors.begin(); it != this->file_vectors.end(); it++)
     {
         if (find(list.begin(), list.end(), it->second.get_socket()) != list.end() && it->second.get_socket() != socket)
@@ -431,8 +466,7 @@ void    Server::send_join_message(std::string username, std::string channel_name
     std::string join_message;
 
     list = this->channels[channel_name].get_users_list();
-    msg = ":" + username + " JOIN #" + channel_name + "\r\n";
-    std::cout << msg ;
+    msg = ":" + username + this->file_vectors[get_user_socket(username)].full_host() + " JOIN #" + channel_name + "\r\n";
     for (it = this->file_vectors.begin(); it != this->file_vectors.end(); it++)
     {
         if (find(list.begin(), list.end(), it->second.get_socket()) != list.end()) {
@@ -489,18 +523,16 @@ void    Server::send_part_message_to_channel(std::string channel_name,std::strin
 
     list = this->channels[channel_name].get_users_list();
     if (message.empty())
-        msg = ":" + client + " PART #" + channel_name + "\r\n";
+        msg = ":" + client + this->file_vectors[get_user_socket(client)].full_host() + " PART #" + channel_name + "\r\n";
     else
-        msg = ":" + client + " PART #" + channel_name + " :" + message + "\r\n";
+        msg = ":" + client + this->file_vectors[get_user_socket(client)].full_host() + " PART #" + channel_name + " :" + message + "\r\n";
     for (it = this->file_vectors.begin(); it != this->file_vectors.end(); it++)
     {
         if (find(list.begin(), list.end(), it->second.get_socket()) != list.end()){
 
            if (send(it->second.get_socket(),msg.c_str(),msg.size(),0) < 0)
-                std::cout << "Error:  micaje not sind" << std::endl;
+                std::cout << "Error:  message not send" << std::endl;
         }
-        else
-            std::cout << "user :" << it->second.get_client().get_nick_name() << " not in channel." << std::endl;
     }
 }
 
@@ -511,9 +543,9 @@ void    Server::send_kick_message_to_channel(std::string channel_name, std::stri
 
     list = this->channels[channel_name].get_users_list();
     if (!reason.empty())
-        message = ":" +  kicker + " KICK #" + channel_name + " " + kicked_user + " :" + reason + "\r\n";
+        message = ":" +  kicker + this->file_vectors[get_user_socket(kicker)].full_host() + " KICK #" + channel_name + " " + kicked_user + " :" + reason + "\r\n";
     else
-        message = ":" +  kicker + " KICK #" + channel_name + " " + kicked_user + "\r\n";
+        message = ":" +  kicker + this->file_vectors[get_user_socket(kicker)].full_host() + " KICK #" + channel_name + " " + kicked_user + "\r\n";
     for (it = this->file_vectors.begin(); it != this->file_vectors.end(); it++) {
         if (find(list.begin(), list.end(), it->second.get_socket()) != list.end()){
             send_a_message(it->second.get_socket(), message);

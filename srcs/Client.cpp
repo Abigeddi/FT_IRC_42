@@ -122,7 +122,7 @@ int Client:: check_parameters(std:: string parameters)
     return (check = 461);
 }
 
-// void Client:: erase_nickname()
-// {
-//     this->nick_name.erase();
-// }
+void Client:: erase_nickname()
+{
+    this->nick_name.erase();
+}
